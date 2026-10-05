@@ -1,4 +1,5 @@
 from datetime import date
+import hashlib
 import json
 import os
 import streamlit as st
@@ -28,6 +29,12 @@ st.markdown(
 )
 
 USER_FILE = "users.json"
+
+
+# Password Hashing Helper
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
 
 # Master Registry of All Tracked Nutrients & Labels
 NUTRIENT_CATEGORIES = {
@@ -81,13 +88,12 @@ NUTRIENT_CATEGORIES = {
     },
 }
 
-# Flattened lookup dict for fast label resolution
 ALL_NUTRIENTS = {}
 for cat_dict in NUTRIENT_CATEGORIES.values():
     ALL_NUTRIENTS.update(cat_dict)
 
 
-# 3. Crash-Proof Local File Handler
+# 3. Crash-Proof Storage Helpers
 def load_data(filepath, default_val):
     if not os.path.exists(filepath):
         return default_val
@@ -124,38 +130,83 @@ if "current_user" not in st.session_state:
 def run_app():
     st.title("⚡ No BS Tracker")
 
+    # --- Authentication (Login / Sign Up) ---
     if not st.session_state["logged_in"]:
-        username = st.text_input("Enter Username to Start / Resume")
-        if st.button("Continue"):
-            if username.strip():
-                u_clean = username.strip()
-                st.session_state["current_user"] = u_clean
-                st.session_state["logged_in"] = True
+        auth_mode = st.radio(
+            "Account Access", ["Log In", "Sign Up"], horizontal=True
+        )
 
-                if u_clean not in st.session_state["user_data"]:
+        if auth_mode == "Log In":
+            st.subheader("🔑 Log In")
+            username = st.text_input("Username", key="login_user")
+            password = st.text_input(
+                "Password", type="password", key="login_pass"
+            )
+
+            if st.button("Log In"):
+                u_clean = username.strip()
+                if u_clean in st.session_state["user_data"]:
+                    stored_user = st.session_state["user_data"][u_clean]
+                    stored_pwd = stored_user.get("password")
+
+                    # If user has password set, verify hash
+                    if stored_pwd == hash_password(password):
+                        st.session_state["current_user"] = u_clean
+                        st.session_state["logged_in"] = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password.")
+                else:
+                    st.error("Username not found. Please sign up.")
+
+        else:
+            st.subheader("📝 Create Account")
+            username = st.text_input("Choose Username", key="signup_user")
+            password = st.text_input(
+                "Choose Password", type="password", key="signup_pass"
+            )
+            confirm_pass = st.text_input(
+                "Confirm Password", type="password", key="signup_confirm"
+            )
+
+            if st.button("Create Account"):
+                u_clean = username.strip()
+                if not u_clean:
+                    st.warning("Please enter a username.")
+                elif u_clean in st.session_state["user_data"]:
+                    st.error("Username already exists. Please log in.")
+                elif password != confirm_pass:
+                    st.error("Passwords do not match.")
+                elif not password:
+                    st.warning("Password cannot be empty.")
+                else:
                     st.session_state["user_data"][u_clean] = {
+                        "password": hash_password(password),
                         "habits": {},
                         "meals": {},
                         "favorites": {},
                         "goals": {},
                     }
                     save_data(USER_FILE, st.session_state["user_data"])
+                    st.session_state["current_user"] = u_clean
+                    st.session_state["logged_in"] = True
+                    st.success("Account created!")
+                    st.rerun()
 
-                st.rerun()
     else:
         user = st.session_state["current_user"]
         user_info = st.session_state["user_data"].get(
             user, {"habits": {}, "meals": {}, "favorites": {}, "goals": {}}
         )
 
-        # Ensure dictionary integrity
+        # Integrity checks
         for key in ["habits", "meals", "favorites", "goals"]:
             if key not in user_info:
                 user_info[key] = {}
 
         st.caption(f"Logged in as: **{user}**")
 
-        # --- Four Primary Navigation Tabs ---
+        # --- Primary Navigation Tabs ---
         tab_habits, tab_nutrition, tab_goals, tab_tips = st.tabs(
             [
                 "⚡ Habits",
@@ -217,7 +268,6 @@ def run_app():
 
             daily_meals = user_info["meals"].get(date_str, [])
 
-            # Compute daily totals
             total_cals = sum(float(m.get("calories", 0)) for m in daily_meals)
             nutrient_totals = {k: 0.0 for k in ALL_NUTRIENTS.keys()}
 
@@ -226,18 +276,15 @@ def run_app():
                 for k in nutrient_totals.keys():
                     nutrient_totals[k] += float(m_nutrients.get(k, 0.0))
 
-            # Daily Overview Header
             st.markdown(f"### Daily Summary for {date_str}")
             user_goals = user_info.get("goals", {})
 
-            # Main Macro Cards
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Calories", f"{int(total_cals)} kcal")
             c2.metric("Protein", f"{round(nutrient_totals['protein'], 1)}g")
             c3.metric("Carbs", f"{round(nutrient_totals['carbs'], 1)}g")
             c4.metric("Fat", f"{round(nutrient_totals['fat'], 1)}g")
 
-            # Daily Goal Progress Visualizers (if set)
             if user_goals:
                 with st.expander("📊 Goal Progress Bars", expanded=True):
                     for g_key, g_target in user_goals.items():
@@ -258,7 +305,6 @@ def run_app():
                             )
                             st.progress(pct)
 
-            # Detailed Micronutrient Breakdown Toggle
             with st.expander("🔬 Complete Daily Breakdown"):
                 for cat_name, cat_fields in NUTRIENT_CATEGORIES.items():
                     st.markdown(f"**{cat_name}**")
@@ -295,7 +341,6 @@ def run_app():
 
             st.markdown("---")
 
-            # Favorites Quick Fill System
             fav_dict = user_info["favorites"]
             fav_options = ["-- Quick-Fill Favorite --"] + list(fav_dict.keys())
             selected_fav = st.selectbox("Favorite Templates", fav_options)
@@ -310,7 +355,6 @@ def run_app():
                 def_cals = int(fav_item.get("calories", 0))
                 def_nutrients.update(fav_item.get("nutrients", {}))
 
-            # Meal Entry Form
             st.subheader("➕ Add Meal")
             with st.form("log_meal_form", clear_on_submit=True):
                 f_name = st.text_input("Meal Name", value=def_name)
@@ -352,7 +396,6 @@ def run_app():
                     "fiber": f_fiber,
                 }
 
-                # Optional Section 1: Protein & Fiber Breakdown
                 with st.expander(
                     "🥩 Protein & Fiber Breakdown (Optional)", expanded=False
                 ):
@@ -388,7 +431,6 @@ def run_app():
                         step=0.5,
                     )
 
-                # Optional Section 2: Fat Subtypes & Omegas
                 with st.expander(
                     "🥑 Fat Subtypes & Omegas (Optional)", expanded=False
                 ):
@@ -407,7 +449,6 @@ def run_app():
                         )
                         idx += 1
 
-                # Optional Section 3: Vitamins & Minerals
                 with st.expander(
                     "💊 Vitamins & Minerals (Optional)", expanded=False
                 ):
@@ -536,7 +577,6 @@ def run_app():
             st.rerun()
 
 
-# Catch background WebSocket reconnect glitches automatically
 if __name__ == "__main__":
     try:
         run_app()
