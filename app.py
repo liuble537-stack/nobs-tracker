@@ -502,4 +502,4 @@ if st.session_state.food_list:
 
     if st.button("🗑️ Clear Today's Log"):
         st.session_state.food_list = []
-        st.rerun()
+        st.rerun()ss
