@@ -27,7 +27,7 @@ st.markdown(
 USER_FILE = "users.json"
 
 
-# 3. Safe JSON Loader
+# 3. Safe Storage Helpers
 def load_data(filepath, default_val):
     if not os.path.exists(filepath):
         return default_val
@@ -49,7 +49,7 @@ def save_data(filepath, data):
         st.error(f"Storage error: {e}")
 
 
-# 4. Safe Session Initialization
+# 4. Session State Setup
 if "user_data" not in st.session_state:
     st.session_state["user_data"] = load_data(USER_FILE, {})
 
@@ -60,7 +60,7 @@ if "current_user" not in st.session_state:
     st.session_state["current_user"] = None
 
 
-# 5. Core App Logic
+# 5. Core Application Logic
 def run_app():
     st.title("⚡ No BS Tracker")
 
@@ -73,8 +73,7 @@ def run_app():
 
                 if username not in st.session_state["user_data"]:
                     st.session_state["user_data"][username] = {
-                        "habits": [],
-                        "streaks": {},
+                        "habits": {},
                         "meals": {},
                         "favorites": {},
                     }
@@ -84,95 +83,137 @@ def run_app():
     else:
         user = st.session_state["current_user"]
         user_info = st.session_state["user_data"].get(
-            user, {"habits": [], "streaks": {}, "meals": {}, "favorites": {}}
+            user, {"habits": {}, "meals": {}, "favorites": {}}
         )
 
-        # Ensure dictionary keys exist
+        # Structure checks
+        if "habits" not in user_info:
+            user_info["habits"] = {}
         if "meals" not in user_info:
             user_info["meals"] = {}
         if "favorites" not in user_info:
             user_info["favorites"] = {}
 
-        st.subheader(f"User: {user}")
+        st.caption(f"Logged in as: **{user}**")
 
-        # --- 1. Calendar & Date Selection ---
-        selected_date = st.date_input("📅 Select Date", date.today())
-        date_str = selected_date.strftime("%Y-%m-%d")
+        # --- Tab Navigation ---
+        tab_habits, tab_calories = st.tabs(
+            ["⚡ Habit & Streak Tracker", "🥗 Calorie & Meal Log"]
+        )
 
-        # Load meals for selected date
-        daily_meals = user_info["meals"].get(date_str, [])
-        total_cals = sum(int(m["calories"]) for m in daily_meals)
+        # ==========================================
+        # TAB 1: HABITS & STREAKS
+        # ==========================================
+        with tab_habits:
+            st.subheader("🔥 Habit Streaks")
 
-        st.markdown(f"### 📊 Total for {date_str}: **{total_cals} kcal**")
+            # Add new habit
+            with st.form("add_habit_form", clear_on_submit=True):
+                new_habit = st.text_input("New Habit Name")
+                if st.form_submit_button("Add Habit"):
+                    if new_habit.strip():
+                        habit_name = new_habit.strip()
+                        if habit_name not in user_info["habits"]:
+                            user_info["habits"][habit_name] = {
+                                "streak": 0,
+                                "last_completed": "",
+                            }
+                            st.session_state["user_data"][user] = user_info
+                            save_data(USER_FILE, st.session_state["user_data"])
+                            st.rerun()
 
-        # Table Display
-        if daily_meals:
-            st.table(
-                [
-                    {"Meal": m["name"], "Calories (kcal)": m["calories"]}
-                    for m in daily_meals
-                ]
-            )
-            if st.button("Clear Date Logs"):
-                user_info["meals"][date_str] = []
-                st.session_state["user_data"][user] = user_info
-                save_data(USER_FILE, st.session_state["user_data"])
-                st.rerun()
-        else:
-            st.info("No meals logged for this date yet.")
+            # Display active habits
+            if user_info["habits"]:
+                today_str = date.today().strftime("%Y-%m-%d")
 
-        st.markdown("---")
+                for h_name, h_data in list(user_info["habits"].items()):
+                    col1, col2, col3 = st.columns([3, 2, 1])
 
-        # --- 2. Quick-Autofill from Favorites ---
-        st.subheader("⭐ Favorite Meals")
-        fav_dict = user_info["favorites"]
-        fav_options = ["-- Select a Favorite --"] + list(fav_dict.keys())
+                    col1.write(f"**{h_name}**")
+                    col2.write(f"🔥 {h_data.get('streak', 0)} day streak")
 
-        selected_fav = st.selectbox("Quick-fill meal:", fav_options)
+                    already_done = h_data.get("last_completed") == today_str
+                    if col3.button(
+                        "Done" if not already_done else "✓",
+                        key=f"btn_{h_name}",
+                        disabled=already_done,
+                    ):
+                        h_data["streak"] = h_data.get("streak", 0) + 1
+                        h_data["last_completed"] = today_str
+                        st.session_state["user_data"][user] = user_info
+                        save_data(USER_FILE, st.session_state["user_data"])
+                        st.balloons()
+                        st.rerun()
+            else:
+                st.info("No habits added yet. Create your first one above!")
 
-        default_name = ""
-        default_cals = 0
+        # ==========================================
+        # TAB 2: CALORIES & MEALS
+        # ==========================================
+        with tab_calories:
+            selected_date = st.date_input("📅 Select Date", date.today())
+            date_str = selected_date.strftime("%Y-%m-%d")
 
-        if selected_fav != "-- Select a Favorite --":
-            default_name = selected_fav
-            default_cals = int(fav_dict[selected_fav])
+            daily_meals = user_info["meals"].get(date_str, [])
+            total_cals = sum(int(m["calories"]) for m in daily_meals)
 
-        # --- 3. Log Meal Form ---
-        st.subheader("➕ Log Meal")
-        with st.form("add_meal_form", clear_on_submit=True):
-            meal_name = st.text_input("Meal Name", value=default_name)
-            meal_cals = st.number_input(
-                "Calories", min_value=0, value=default_cals, step=10
-            )
-            save_as_fav = st.checkbox("Save to Favorites for quick access")
+            st.markdown(f"### Total for {date_str}: **{total_cals} kcal**")
 
-            submitted = st.form_submit_button("Add Meal to Table")
-
-            if submitted:
-                if meal_name.strip():
-                    new_meal = {
-                        "name": meal_name.strip(),
-                        "calories": int(meal_cals),
-                    }
-
-                    if date_str not in user_info["meals"]:
-                        user_info["meals"][date_str] = []
-
-                    user_info["meals"][date_str].append(new_meal)
-
-                    if save_as_fav:
-                        user_info["favorites"][meal_name.strip()] = int(
-                            meal_cals
-                        )
-
+            if daily_meals:
+                st.table(
+                    [
+                        {"Meal": m["name"], "Calories": f"{m['calories']} kcal"}
+                        for m in daily_meals
+                    ]
+                )
+                if st.button("Clear Today's Meals"):
+                    user_info["meals"][date_str] = []
                     st.session_state["user_data"][user] = user_info
                     save_data(USER_FILE, st.session_state["user_data"])
-                    st.success(
-                        f"Added {meal_name} ({meal_cals} kcal) to {date_str}!"
-                    )
                     st.rerun()
-                else:
-                    st.warning("Please enter a meal name.")
+            else:
+                st.info("No meals logged for this date.")
+
+            st.markdown("---")
+
+            # Favorites Quick Fill
+            fav_dict = user_info["favorites"]
+            fav_options = ["-- Quick-Fill Favorite --"] + list(fav_dict.keys())
+            selected_fav = st.selectbox("Favorite Templates", fav_options)
+
+            def_name = ""
+            def_cals = 0
+            if selected_fav != "-- Quick-Fill Favorite --":
+                def_name = selected_fav
+                def_cals = int(fav_dict[selected_fav])
+
+            # Meal Entry Form
+            with st.form("log_meal_form", clear_on_submit=True):
+                meal_name = st.text_input("Meal Name", value=def_name)
+                meal_cals = st.number_input(
+                    "Calories", min_value=0, value=def_cals, step=10
+                )
+                save_fav = st.checkbox("Save as Favorite template")
+
+                if st.form_submit_button("Log Meal"):
+                    if meal_name.strip():
+                        new_entry = {
+                            "name": meal_name.strip(),
+                            "calories": int(meal_cals),
+                        }
+                        if date_str not in user_info["meals"]:
+                            user_info["meals"][date_str] = []
+
+                        user_info["meals"][date_str].append(new_entry)
+
+                        if save_fav:
+                            user_info["favorites"][meal_name.strip()] = int(
+                                meal_cals
+                            )
+
+                        st.session_state["user_data"][user] = user_info
+                        save_data(USER_FILE, st.session_state["user_data"])
+                        st.rerun()
 
         st.markdown("---")
         if st.button("Log Out"):
@@ -181,7 +222,6 @@ def run_app():
             st.rerun()
 
 
-# Global reconnect crash protection
 if __name__ == "__main__":
     try:
         run_app()
